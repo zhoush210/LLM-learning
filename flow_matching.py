@@ -22,6 +22,7 @@ class FlowMatchingMLP(nn.Module):
 
 	def __init__(self, x_dim=2, hidden_dim=128):
 		super().__init__()
+		self.x_dim = x_dim
 		self.net = nn.Sequential(
 			nn.Linear(x_dim + 1, hidden_dim),
 			nn.SiLU(),
@@ -35,30 +36,39 @@ class FlowMatchingMLP(nn.Module):
 		return self.net(torch.cat([x, t], dim=-1))
 
 
-def sample_target_distribution(batch_size, device):
+def sample_target_distribution(batch_size, device, x_dim=2):
 	"""
-	目标分布：8 个高斯团组成的 2D 环形混合分布。
-	返回形状：(B, 2)
+	目标分布：8 个高斯团组成的环形混合分布（兼容任意 x_dim）。
+	当 x_dim>=2 时，前两维为环形结构，其余维度中心为 0。
+	返回形状：(B, x_dim)
 	"""
+	if x_dim < 1:
+		raise ValueError(f"x_dim must be >= 1, got {x_dim}")
+
 	k = 8
 	# 每个样本随机选择一个簇
 	idx = torch.randint(0, k, (batch_size,), device=device)
 	angles = 2 * math.pi * idx.float() / k
-	centers = torch.stack([2.0 * torch.cos(angles), 2.0 * torch.sin(angles)], dim=-1)
-	noise = 0.15 * torch.randn(batch_size, 2, device=device)
+
+	centers = torch.zeros(batch_size, x_dim, device=device)
+	centers[:, 0] = 2.0 * torch.cos(angles)
+	if x_dim >= 2:
+		centers[:, 1] = 2.0 * torch.sin(angles)
+
+	noise = 0.15 * torch.randn(batch_size, x_dim, device=device)
 	return centers + noise
 
 
-def flow_matching_loss(model, x1):
+def flow_matching_loss(model, x1): # x1是目标分布
 	"""
 	条件 Flow Matching 损失（线性插值路径）。
-	输入 x1: (B, 2)
+	输入 x1: (B, x_dim)
 	"""
 	device = x1.device
 	batch_size = x1.size(0)
 
 	# 基础分布样本 x0
-	x0 = torch.randn_like(x1)
+	x0 = torch.randn_like(x1) # x0是初始噪声分布
 	# t ~ Uniform(0,1)
 	t = torch.rand(batch_size, 1, device=device)
 
@@ -77,7 +87,7 @@ def sample_from_model(model, num_samples=1024, num_steps=200, device="cpu"):
 	  dx/dt = v_theta(x, t), t in [0,1]
 	"""
 	model.eval()
-	x = torch.randn(num_samples, 2, device=device)
+	x = torch.randn(num_samples, model.x_dim, device=device)
 	dt = 1.0 / num_steps
 
 	for step in range(num_steps):
@@ -94,19 +104,20 @@ def train_flow_matching(
 	batch_size=512,
 	lr=1e-3,
 	hidden_dim=128,
+	x_dim=2,
 	device=None,
 ):
 	"""训练入口，返回训练后的 model 和每一步 loss。"""
 	if device is None:
 		device = "cuda" if torch.cuda.is_available() else "cpu"
 
-	model = FlowMatchingMLP(x_dim=2, hidden_dim=hidden_dim).to(device)
+	model = FlowMatchingMLP(x_dim=x_dim, hidden_dim=hidden_dim).to(device)
 	optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
 	losses = []
 	model.train()
 	for step in range(steps):
-		x1 = sample_target_distribution(batch_size, device)
+		x1 = sample_target_distribution(batch_size, device, x_dim=x_dim)
 		loss = flow_matching_loss(model, x1)
 
 		optimizer.zero_grad()
@@ -124,26 +135,27 @@ def train_flow_matching(
 def test_flow_matching_components():
 	"""基础功能测试：形状、数值稳定性、训练有效性。"""
 	device = "cuda" if torch.cuda.is_available() else "cpu"
+	x_dim = 2
 	print(f"[test] device = {device}")
 
 	# 1) 前向形状测试
-	model = FlowMatchingMLP().to(device)
-	x = torch.randn(16, 2, device=device)
+	model = FlowMatchingMLP(x_dim=x_dim).to(device)
+	x = torch.randn(16, x_dim, device=device)
 	t = torch.rand(16, 1, device=device)
 	v = model(x, t)
-	assert v.shape == (16, 2), f"模型输出形状错误: {v.shape}"
+	assert v.shape == (16, x_dim), f"模型输出形状错误: {v.shape}"
 	assert torch.isfinite(v).all(), "模型输出包含非有限值"
 	print("[test] forward shape/finiteness passed")
 
 	# 2) 损失可计算测试
-	x1 = sample_target_distribution(32, device)
+	x1 = sample_target_distribution(32, device, x_dim=x_dim)
 	loss = flow_matching_loss(model, x1)
 	assert loss.ndim == 0, "loss 不是标量"
 	assert torch.isfinite(loss), "loss 非有限"
 	print(f"[test] loss compute passed, initial loss = {loss.item():.6f}")
 
 	# 3) 短训练有效性测试（只做轻量验证）
-	trained_model, losses = train_flow_matching(steps=200, batch_size=256, lr=1e-3, device=device)
+	trained_model, losses = train_flow_matching(steps=200, batch_size=256, lr=1e-3, x_dim=x_dim, device=device)
 	first_mean = sum(losses[:20]) / 20
 	last_mean = sum(losses[-20:]) / 20
 	print(f"[test] first_mean={first_mean:.6f}, last_mean={last_mean:.6f}")
@@ -153,7 +165,7 @@ def test_flow_matching_components():
 
 	# 4) 采样测试
 	samples = sample_from_model(trained_model, num_samples=128, num_steps=100, device=device)
-	assert samples.shape == (128, 2), f"采样形状错误: {samples.shape}"
+	assert samples.shape == (128, x_dim), f"采样形状错误: {samples.shape}"
 	assert torch.isfinite(samples).all(), "采样结果包含非有限值"
 	print("[test] sampling passed")
 

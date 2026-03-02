@@ -24,8 +24,8 @@ class PositionalEncoding(nn.Module):
         pe=torch.zeros(max_len,d_model) # 形状：[max_len, d_model]
 		# 2. 生成位置索引向量
         position=torch.arange(0,max_len).unsqueeze(1)  #形状：[max_len, 1]，
-        # 3. 计算频率除数项
-        div_term=torch.exp(torch.arange(0,d_model,2).float()*(torch.log(torch.tensor(10000.0)))/d_model).unsqueeze(0)  #形状：[1,d_model/2]，也可以不扩展直接[d_model/2]利用广播机制
+        # 3. 计算频率除数项 1/10000 ^ (2i/d)
+        div_term=torch.exp(-torch.log(torch.tensor(10000.0)) * torch.arange(0,d_model,2).float() / d_model).unsqueeze(0)  #形状：[1,d_model/2]，也可以不扩展直接[d_model/2]利用广播机制
         # 4. 应用正弦和余弦函数生成位置编码
         pe[:,::2]=torch.sin(position*div_term)  #偶数位置使用sin
         pe[:,1::2]=torch.cos(position*div_term)  #奇数位置使用cos
@@ -55,7 +55,7 @@ class MultiHeadAttention(nn.Module):
         self.head_dim=d_model//num_heads
 
         self.dropout=nn.Dropout(dropout)
-        self.scale=torch.sqrt(torch.tensor(self.head_dim)) #缩放因子
+        
     def forward(self,query,key,value,mask=None):
         batch_size,s_seq_len,d_model=query.shape #Source Sequence Length（源序列长度），指的是query序列的长度
         batch_size,t_seq_len,d_model=value.shape #Target Sequence Length（目标序列长度），指的是key和value序列的长度
@@ -70,7 +70,7 @@ class MultiHeadAttention(nn.Module):
         #Q维度：[batch_size, num_heads, s_seq_len, head_dim]
         #K.transpose(-2, -1)：交换最后两个维度，K变为[batch_size, num_heads,head_dim, t_seq_len]
         #矩阵乘法（每个位置(i,j)表示第i个query与第j个key的相似度）
-        scores=torch.matmul(Q,K.transpose(-2,-1))/self.scale #形状[batch_size,num_heads,s_seq_len,t_seq_len]
+        scores=torch.matmul(Q,K.transpose(-2,-1)) / torch.sqrt(torch.tensor(self.head_dim)) #形状[batch_size,num_heads,s_seq_len,t_seq_len]
         
         #3.掩码处理
         if mask is not None: #如果存在掩码，则将掩码应用到注意力分数上
@@ -188,7 +188,6 @@ class Encoder(nn.Module):
             EncoderLayer(d_model,num_heads,hidden,dropout)
             for _ in range(num_layers)
         ])
-        self.norm=LayerNorm(d_model)
     def forward(self,x,mask=None):
         # 词嵌入 + 位置编码
         x=self.embedding(x)
@@ -210,7 +209,6 @@ class Decoder(nn.Module):
             DecoderLayer(d_model,num_heads,hidden,dropout)
             for _ in range(num_layers)
         ])
-        self.norm=LayerNorm(d_model)
     def forward(self,x,encoder_output,src_mask=None,tgt_mask=None):
         # 词嵌入 + 位置编码
         x=self.embedding(x)

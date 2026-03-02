@@ -1,0 +1,1 @@
+vscode 设置关闭自动补全 editor.inlineSuggest.enabled

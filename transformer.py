@@ -45,16 +45,15 @@ class MultiHeadAttention(nn.Module):
         super().__init__()
         assert d_model%num_heads==0 #保证能拆分成整数个头
 
-        self.key=nn.Linear(d_model,d_model) #形状都是[d_model,d_model]
-        self.query=nn.Linear(d_model,d_model) 
-        self.value=nn.Linear(d_model,d_model) 
-        self.proj=nn.Linear(d_model,d_model) 
-
         self.d_model=d_model
         self.num_heads=num_heads
         self.head_dim=d_model//num_heads
-
         self.dropout=nn.Dropout(dropout)
+
+        self.key=nn.Linear(d_model,d_model) #形状都是[d_model,d_model]
+        self.query=nn.Linear(d_model,d_model) 
+        self.value=nn.Linear(d_model,d_model) 
+        self.proj=nn.Linear(d_model,d_model)
         
     def forward(self,query,key,value,mask=None):
         batch_size,s_seq_len,d_model=query.shape #Source Sequence Length（源序列长度），指的是query序列的长度

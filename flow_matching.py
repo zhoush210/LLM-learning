@@ -35,7 +35,7 @@ class FlowMatchingMLP(nn.Module):
 		# x: (B, x_dim), t: (B, 1)
 		return self.net(torch.cat([x, t], dim=-1))
 
-
+# 不用背
 def sample_target_distribution(batch_size, device, x_dim=2):
 	"""
 	目标分布：8 个高斯团组成的环形混合分布（兼容任意 x_dim）。
@@ -91,14 +91,14 @@ def sample_from_model(model, num_samples=1024, num_steps=200, device="cpu"):
 	dt = 1.0 / num_steps
 
 	for step in range(num_steps):
-		t_scalar = step / num_steps
+		t_scalar = step * dt
 		t = torch.full((num_samples, 1), t_scalar, device=device)
 		v = model(x, t)
 		x = x + v * dt
 
 	return x
 
-
+# 不用背
 def train_flow_matching(
 	steps=1000,
 	batch_size=512,

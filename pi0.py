@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-class Pi05Model(nn.Module):
+class Pi0Model(nn.Module):
     def __init__(self):
         super().__init__()
 
@@ -12,13 +12,6 @@ class Pi05Model(nn.Module):
         img_tokens = self.siglip(images)         # [B, N_img, dim]
         text_tokens = self.llm_embed(text)       # [B, N_txt, dim]
 
-        # pi0.5: state 走“离散文本”路径（与 tokenizer.py 一致）
-        # 上游 tokenizer 会把 "Task: ..., State: ...;\nAction:" 编成 text。
-        # 这里显式体现这一点：将 state 离散后转成文本 token，再并入 text token。
-        state_discrete_tokens = self.state_to_text_tokens(state)  # [B, N_state_txt]
-        state_text_tokens = self.llm_embed(state_discrete_tokens) # [B, N_state_txt, dim]
-        text_tokens = torch.cat([text_tokens, state_text_tokens], dim=1)
-
         prefix_tokens = torch.cat([img_tokens, text_tokens], dim=1)
 
         # ==========================================
@@ -28,14 +21,18 @@ class Pi05Model(nn.Module):
         action_horizon = action_tokens.shape[1]
         time_emb = self.sincos_emb(timestep)                # [B, dim]
 
-        # 【pi0.5 专属逻辑】
-        # a. 连续状态投影被移除 (源码中 if not pi05 才加 state_token)
+        # 【pi0 专属逻辑】
+        # a. 连续状态投影为 1 个 Token
+        state_token = self.state_proj(state).unsqueeze(1) 
         
-        # b. 时间步通过 MLP 生成 adarms 的条件变量
-        adarms_cond = self.time_mlp(time_emb)
+        # b. 将时间步 Copy 匹配 action 的长度，并沿特征维度 Concat
+        time_tokens = time_emb.unsqueeze(1).repeat(1, action_horizon, 1)
+        action_time_concat = torch.cat([action_tokens, time_tokens], dim=-1)
+        action_expert_tokens = self.action_time_mlp(action_time_concat)
         
-        # Suffix 仅包含：动作 Tokens (不和时间步 concat)
-        suffix_tokens = action_tokens 
+        # Suffix 包含：状态 Token + 动作 Tokens
+        suffix_tokens = torch.cat([state_token, action_expert_tokens], dim=1)
+        adarms_cond = None # Adaptive RMSNorm condition
 
         # ==========================================
         # 3. 核心大模型主干 (PaliGemma)
@@ -45,7 +42,7 @@ class Pi05Model(nn.Module):
         
         # 注意：这里会用到一个特殊的 Mask，让 Suffix 可以 attend 到 Prefix，
         # 并在 pi0.5 中通过 adarms_cond 注入时间步噪声等级
-        out_tokens = self.llm(all_tokens, attention_mask, adarms_cond)
+        out_tokens = self.llm(all_tokens, attention_mask=..., adarms_cond=adarms_cond)
 
         # ==========================================
         # 4. 提取流匹配的目标速度 (v_t)

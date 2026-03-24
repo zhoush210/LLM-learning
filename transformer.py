@@ -219,6 +219,13 @@ class Decoder(nn.Module):
 
         return x
 
+def create_causal_mask(seq_len,device=None):
+    """创建因果掩码，防止解码器看到未来位置的信息"""
+    # 下三角为1（可见），上三角为0（不可见）
+    mask=torch.tril(torch.ones(seq_len,seq_len,device=device,dtype=torch.bool))
+    # 扩展为[1,1,seq_len,seq_len]，便于与多头注意力分数广播
+    return mask.unsqueeze(0).unsqueeze(0)
+
 class Transformer(nn.Module):
     """完整的Transformer模型，包含编码器、解码器和输出投影层"""
     def __init__(self,src_vocab_size,tgt_vocab_size,d_model,num_heads,hidden,
@@ -229,6 +236,10 @@ class Transformer(nn.Module):
         self.output_projection=nn.Linear(d_model,tgt_vocab_size)
         
     def forward(self,src,tgt,src_mask=None,tgt_mask=None):
+        # 如果未传入目标掩码，则默认使用因果掩码（自回归）
+        if tgt_mask is None:
+            tgt_mask=create_causal_mask(tgt.size(1),device=tgt.device)
+
         # 编码器前向传播
         encoder_output=self.encoder(src,src_mask)
         # 解码器前向传播
@@ -236,6 +247,7 @@ class Transformer(nn.Module):
         # 输出logits（原始分数）
         output=self.output_projection(decoder_output)
         return output
+
 # 测试代码
 def test_transformer_components():
     print("测试Transformer各个组件...")
@@ -294,7 +306,7 @@ def test_transformer_components():
     # 测试掩码功能
     print("\n测试掩码功能...")
     # 创建因果掩码（防止看到未来信息）
-    causal_mask = torch.tril(torch.ones(seq_len, seq_len)).unsqueeze(0).unsqueeze(0)
+    causal_mask = create_causal_mask(seq_len)
     print(f"因果掩码形状: {causal_mask.shape}")
     
     # 测试带掩码的前向传播

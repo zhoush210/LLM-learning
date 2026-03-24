@@ -27,12 +27,11 @@ class Pi0Model(nn.Module):
         
         # b. 将时间步 Copy 匹配 action 的长度，并沿特征维度 Concat
         time_tokens = time_emb.unsqueeze(1).repeat(1, action_horizon, 1)
-        action_time_concat = torch.cat([action_tokens, time_tokens], dim=-1)
-        action_expert_tokens = self.action_time_mlp(action_time_concat)
+        action_time_tokens = torch.cat([action_tokens, time_tokens], dim=-1)
+        action_expert_tokens = self.action_time_mlp(action_time_tokens)
         
         # Suffix 包含：状态 Token + 动作 Tokens
         suffix_tokens = torch.cat([state_token, action_expert_tokens], dim=1)
-        adarms_cond = None # Adaptive RMSNorm condition
 
         # ==========================================
         # 3. 核心大模型主干 (PaliGemma)
@@ -42,7 +41,7 @@ class Pi0Model(nn.Module):
         
         # 注意：这里会用到一个特殊的 Mask，让 Suffix 可以 attend 到 Prefix，
         # 并在 pi0.5 中通过 adarms_cond 注入时间步噪声等级
-        out_tokens = self.llm(all_tokens, attention_mask=..., adarms_cond=adarms_cond)
+        out_tokens = self.llm(all_tokens, attention_mask)
 
         # ==========================================
         # 4. 提取流匹配的目标速度 (v_t)
